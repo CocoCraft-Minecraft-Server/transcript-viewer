@@ -28,7 +28,6 @@ function buildUserMap(messages) {
   return map;
 }
 
-// Mapa de shortcodes comunes de Discord → unicode
 const SHORTCODE_MAP = {
   camara: '📷', camera: '📷', smile: '😊', laughing: '😆', joy: '😂',
   heart: '❤️', thumbsup: '👍', thumbsdown: '👎', fire: '🔥',
@@ -55,32 +54,31 @@ function parseMarkdown(text, userMap = {}) {
   const placeholders = [];
   let result = text;
 
-  // 1. Extraer emojis custom ANTES de escapar HTML para no perderlos
-  // Animados <a:name:id>
+  // 1. Emojis custom animados <a:name:id> → proxy local
   result = result.replace(/<a:([a-zA-Z0-9_]+):(\d+)>/g, (_, name, id) => {
     const idx = placeholders.length;
-    placeholders.push(`<img class="emoji" src="https://cdn.discordapp.com/emojis/${id}.gif?size=44&quality=lossless" alt=":${name}:" />`);
+    placeholders.push(`<img class="emoji" src="/api/emoji/${id}.gif" alt=":${name}:" />`);
     return `\x00P${idx}\x00`;
   });
 
-  // Estáticos <:name:id>
+  // 2. Emojis custom estáticos <:name:id> → proxy local
   result = result.replace(/<:([a-zA-Z0-9_]+):(\d+)>/g, (_, name, id) => {
     const idx = placeholders.length;
-    placeholders.push(`<img class="emoji" src="https://cdn.discordapp.com/emojis/${id}.webp?size=44" alt=":${name}:" />`);
+    placeholders.push(`<img class="emoji" src="/api/emoji/${id}.webp" alt=":${name}:" />`);
     return `\x00P${idx}\x00`;
   });
 
-  // 2. Escapar HTML del texto restante
+  // 3. Escapar HTML
   result = escapeHtml(result);
 
-  // 3. Menciones con nombre real
+  // 4. Menciones con nombre real
   result = result.replace(/&lt;@!?(\d+)&gt;/g, (_, id) => {
     const name = userMap[id] || id;
     return `<span class="mention">@${name}</span>`;
   });
   result = result.replace(/&lt;#(\d+)&gt;/g, '<span class="mention">#canal</span>');
 
-  // 4. Markdown básico
+  // 5. Markdown básico
   result = result
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*(.+?)\*/g, '<em>$1</em>')
@@ -88,12 +86,12 @@ function parseMarkdown(text, userMap = {}) {
     .replace(/~~(.+?)~~/g, '<s>$1</s>')
     .replace(/`(.+?)`/g, '<code>$1</code>');
 
-  // 5. Shortcodes de texto :palabra:
+  // 6. Shortcodes de texto :palabra:
   result = result.replace(/:([a-zA-Z0-9_]+):/g, (match, name) => {
     return SHORTCODE_MAP[name] || match;
   });
 
-  // 6. Restaurar placeholders de emojis
+  // 7. Restaurar placeholders
   result = result.replace(/\x00P(\d+)\x00/g, (_, idx) => placeholders[parseInt(idx)]);
 
   return result;
