@@ -1,4 +1,5 @@
 import clientPromise from '../lib/db';
+import { useState, useEffect } from 'react';
 
 export async function getServerSideProps({ params }) {
   try {
@@ -39,46 +40,36 @@ const SHORTCODE_MAP = {
   derecha: '➡️', izquierda: '⬅️', arriba: '⬆️', abajo: '⬇️',
   grin: '😁', sob: '😭', sweat_smile: '😅', thinking: '🤔',
   ok: '👌', raised_hands: '🙌', pray: '🙏', muscle: '💪',
+  ban: '🔨', apple: '🍎', coconut: '🥥',
 };
-
-function escapeHtml(str) {
-  return str
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
-}
 
 function parseMarkdown(text, userMap = {}) {
   if (!text) return '';
 
-  const placeholders = [];
-  let result = text;
+  // Paso 1: reemplazar emojis custom con img tags directamente
+  // Animados <a:name:id>
+  let result = text.replace(/<a:([a-zA-Z0-9_]+):(\d+)>/g,
+    (_, name, id) => `[[AEMOJI:${id}:${name}]]`
+  );
+  // Estáticos <:name:id>
+  result = result.replace(/<:([a-zA-Z0-9_]+):(\d+)>/g,
+    (_, name, id) => `[[SEMOJI:${id}:${name}]]`
+  );
 
-  // 1. Emojis custom animados <a:name:id> → proxy local
-  result = result.replace(/<a:([a-zA-Z0-9_]+):(\d+)>/g, (_, name, id) => {
-    const idx = placeholders.length;
-    placeholders.push(`<img class="emoji" src="/api/emoji/${id}.gif" alt=":${name}:" />`);
-    return `\x00P${idx}\x00`;
-  });
+  // Paso 2: escapar HTML
+  result = result
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 
-  // 2. Emojis custom estáticos <:name:id> → proxy local
-  result = result.replace(/<:([a-zA-Z0-9_]+):(\d+)>/g, (_, name, id) => {
-    const idx = placeholders.length;
-    placeholders.push(`<img class="emoji" src="/api/emoji/${id}.webp" alt=":${name}:" />`);
-    return `\x00P${idx}\x00`;
-  });
-
-  // 3. Escapar HTML
-  result = escapeHtml(result);
-
-  // 4. Menciones con nombre real
+  // Paso 3: menciones
   result = result.replace(/&lt;@!?(\d+)&gt;/g, (_, id) => {
     const name = userMap[id] || id;
     return `<span class="mention">@${name}</span>`;
   });
   result = result.replace(/&lt;#(\d+)&gt;/g, '<span class="mention">#canal</span>');
 
-  // 5. Markdown básico
+  // Paso 4: markdown
   result = result
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*(.+?)\*/g, '<em>$1</em>')
@@ -86,20 +77,34 @@ function parseMarkdown(text, userMap = {}) {
     .replace(/~~(.+?)~~/g, '<s>$1</s>')
     .replace(/`(.+?)`/g, '<code>$1</code>');
 
-  // 6. Shortcodes de texto :palabra:
-  result = result.replace(/:([a-zA-Z0-9_]+):/g, (match, name) => {
-    return SHORTCODE_MAP[name] || match;
-  });
+  // Paso 5: shortcodes :texto:
+  result = result.replace(/:([a-zA-Z0-9_]+):/g, (match, name) =>
+    SHORTCODE_MAP[name] || match
+  );
 
-  // 7. Restaurar placeholders
-  result = result.replace(/\x00P(\d+)\x00/g, (_, idx) => placeholders[parseInt(idx)]);
+  // Paso 6: restaurar emojis custom (ahora seguros porque ya escapamos el HTML)
+  result = result.replace(/\[\[AEMOJI:(\d+):([a-zA-Z0-9_]+)\]\]/g,
+    (_, id, name) => `<img class="emoji" src="/api/emoji/${id}.gif" alt=":${name}:" />`
+  );
+  result = result.replace(/\[\[SEMOJI:(\d+):([a-zA-Z0-9_]+)\]\]/g,
+    (_, id, name) => `<img class="emoji" src="/api/emoji/${id}.webp" alt=":${name}:" />`
+  );
 
   return result;
 }
 
+// Componente que renderiza markdown SOLO en el cliente para evitar hydration error
 function RenderText({ text, userMap }) {
+  const [html, setHtml] = useState('');
+
+  useEffect(() => {
+    if (!text) return;
+    const parsed = parseMarkdown(text, userMap).split('\n').join('<br>');
+    setHtml(parsed);
+  }, [text, userMap]);
+
   if (!text) return null;
-  const html = parseMarkdown(text, userMap).split('\n').join('<br>');
+  if (!html) return <span>{text}</span>;
   return <span dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
