@@ -20,33 +20,98 @@ function formatTime(dateStr) {
   });
 }
 
-function parseMarkdown(text) {
-  if (!text) return text;
-  return text
+function buildUserMap(messages) {
+  const map = {};
+  for (const m of messages || []) {
+    if (m.authorId && m.authorUsername) map[m.authorId] = m.authorUsername;
+  }
+  return map;
+}
+
+// Mapa de shortcodes comunes de Discord → unicode
+const SHORTCODE_MAP = {
+  camara: '📷', camera: '📷', smile: '😊', laughing: '😆', joy: '😂',
+  heart: '❤️', thumbsup: '👍', thumbsdown: '👎', fire: '🔥',
+  check: '✅', x: '❌', warning: '⚠️', star: '⭐', crown: '👑',
+  wave: '👋', clap: '👏', eyes: '👀', tada: '🎉', rocket: '🚀',
+  bug: '🐛', hammer: '🔨', wrench: '🔧', shield: '🛡️', sword: '⚔️',
+  diamond: '💎', coin: '🪙', ticket: '🎫', bell: '🔔', lock: '🔒',
+  unlock: '🔓', mute: '🔇', pin: '📌', link: '🔗',
+  derecha: '➡️', izquierda: '⬅️', arriba: '⬆️', abajo: '⬇️',
+  grin: '😁', sob: '😭', sweat_smile: '😅', thinking: '🤔',
+  ok: '👌', raised_hands: '🙌', pray: '🙏', muscle: '💪',
+};
+
+function escapeHtml(str) {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function parseMarkdown(text, userMap = {}) {
+  if (!text) return '';
+
+  const placeholders = [];
+  let result = text;
+
+  // 1. Extraer emojis custom ANTES de escapar HTML para no perderlos
+  // Animados <a:name:id>
+  result = result.replace(/<a:([a-zA-Z0-9_]+):(\d+)>/g, (_, name, id) => {
+    const idx = placeholders.length;
+    placeholders.push(`<img class="emoji" src="https://cdn.discordapp.com/emojis/${id}.gif?size=44&quality=lossless" alt=":${name}:" />`);
+    return `\x00P${idx}\x00`;
+  });
+
+  // Estáticos <:name:id>
+  result = result.replace(/<:([a-zA-Z0-9_]+):(\d+)>/g, (_, name, id) => {
+    const idx = placeholders.length;
+    placeholders.push(`<img class="emoji" src="https://cdn.discordapp.com/emojis/${id}.webp?size=44" alt=":${name}:" />`);
+    return `\x00P${idx}\x00`;
+  });
+
+  // 2. Escapar HTML del texto restante
+  result = escapeHtml(result);
+
+  // 3. Menciones con nombre real
+  result = result.replace(/&lt;@!?(\d+)&gt;/g, (_, id) => {
+    const name = userMap[id] || id;
+    return `<span class="mention">@${name}</span>`;
+  });
+  result = result.replace(/&lt;#(\d+)&gt;/g, '<span class="mention">#canal</span>');
+
+  // 4. Markdown básico
+  result = result
     .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     .replace(/\*(.+?)\*/g, '<em>$1</em>')
     .replace(/__(.+?)__/g, '<u>$1</u>')
     .replace(/~~(.+?)~~/g, '<s>$1</s>')
-    .replace(/`(.+?)`/g, '<code>$1</code>')
-    .replace(/<a:([a-zA-Z0-9_~]+):(\d+)>/g, '<img class="emoji" src="https://cdn.discordapp.com/emojis/$2.gif?size=44" alt=":$1:">')
-    .replace(/<:([a-zA-Z0-9_~]+):(\d+)>/g, '<img class="emoji" src="https://cdn.discordapp.com/emojis/$2.webp?size=44" alt=":$1:">')
-    .replace(/<@!?(\d+)>/g, '<span class="mention">@usuari@</span>')
-    .replace(/<#(\d+)>/g, '<span class="mention">#canal</span>');
+    .replace(/`(.+?)`/g, '<code>$1</code>');
+
+  // 5. Shortcodes de texto :palabra:
+  result = result.replace(/:([a-zA-Z0-9_]+):/g, (match, name) => {
+    return SHORTCODE_MAP[name] || match;
+  });
+
+  // 6. Restaurar placeholders de emojis
+  result = result.replace(/\x00P(\d+)\x00/g, (_, idx) => placeholders[parseInt(idx)]);
+
+  return result;
 }
 
-function RenderText({ text }) {
+function RenderText({ text, userMap }) {
   if (!text) return null;
-  const html = parseMarkdown(text)
-    .split('\n')
-    .join('<br>');
+  const html = parseMarkdown(text, userMap).split('\n').join('<br>');
   return <span dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
 function Avatar({ src }) {
   return (
-    <img src={src || 'https://cdn.discordapp.com/embed/avatars/0.png'}
+    <img
+      src={src || 'https://cdn.discordapp.com/embed/avatars/0.png'}
       onError={e => { e.target.src = 'https://cdn.discordapp.com/embed/avatars/0.png'; }}
-      style={{ width: 40, height: 40, borderRadius: '50%', flexShrink: 0, marginTop: 2 }} />
+      style={{ width: 40, height: 40, borderRadius: '50%', flexShrink: 0, marginTop: 2 }}
+    />
   );
 }
 
@@ -61,9 +126,14 @@ function Attachment({ att }) {
   if (isImg) return (
     <div style={{ marginTop: 8 }}>
       <a href={url} target="_blank" rel="noopener noreferrer">
-        <img src={url} alt={name}
-          onError={e => { e.target.style.display = 'none'; e.target.nextSibling && (e.target.nextSibling.style.display = 'block'); }}
-          style={{ maxWidth: 400, maxHeight: 300, borderRadius: 4, display: 'block', cursor: 'pointer', border: '1px solid rgba(255,255,255,.1)' }} />
+        <img
+          src={url} alt={name}
+          onError={e => {
+            e.target.style.display = 'none';
+            if (e.target.nextSibling) e.target.nextSibling.style.display = 'block';
+          }}
+          style={{ maxWidth: 400, maxHeight: 300, borderRadius: 4, display: 'block', cursor: 'pointer', border: '1px solid rgba(255,255,255,.1)' }}
+        />
         <span style={{ display: 'none', color: '#949ba4', fontSize: 12 }}>🖼️ {name} (imagen expirada)</span>
       </a>
     </div>
@@ -71,7 +141,8 @@ function Attachment({ att }) {
   if (isVid) return (
     <video src={url} controls
       style={{ maxWidth: 400, borderRadius: 4, display: 'block', marginTop: 8 }}
-      onError={e => { e.target.style.display = 'none'; }} />
+      onError={e => { e.target.style.display = 'none'; }}
+    />
   );
   if (isAud) return <audio src={url} controls style={{ display: 'block', marginTop: 8, width: '100%', maxWidth: 400 }} />;
   return (
@@ -81,7 +152,7 @@ function Attachment({ att }) {
   );
 }
 
-function Message({ msg, prevMsg }) {
+function Message({ msg, prevMsg, userMap }) {
   const sameAuthor = prevMsg && prevMsg.authorId === msg.authorId &&
     (new Date(msg.createdAt) - new Date(prevMsg.createdAt)) < 5 * 60 * 1000;
   const color = msg.authorColor && msg.authorColor !== '#000000' ? msg.authorColor : '#ffffff';
@@ -105,7 +176,7 @@ function Message({ msg, prevMsg }) {
         )}
         {msg.content && (
           <div style={{ color: '#dbdee1', fontSize: 15, lineHeight: 1.375, wordBreak: 'break-word' }}>
-            <RenderText text={msg.content} />
+            <RenderText text={msg.content} userMap={userMap} />
           </div>
         )}
         {msg.attachments?.map((att, i) => <Attachment key={i} att={att} />)}
@@ -120,18 +191,18 @@ function Message({ msg, prevMsg }) {
           }}>
             {emb.title && (
               <div style={{ fontWeight: 700, color: '#fff', marginBottom: 4, fontSize: 15 }}>
-                <RenderText text={emb.title} />
+                <RenderText text={emb.title} userMap={userMap} />
               </div>
             )}
             {emb.description && (
               <div style={{ color: '#dbdee1', fontSize: 14, lineHeight: 1.4 }}>
-                <RenderText text={emb.description} />
+                <RenderText text={emb.description} userMap={userMap} />
               </div>
             )}
             {emb.fields?.map((f, fi) => (
               <div key={fi} style={{ marginTop: 8 }}>
-                <div style={{ fontWeight: 700, color: '#fff', fontSize: 13 }}><RenderText text={f.name} /></div>
-                <div style={{ color: '#dbdee1', fontSize: 13 }}><RenderText text={f.value} /></div>
+                <div style={{ fontWeight: 700, color: '#fff', fontSize: 13 }}><RenderText text={f.name} userMap={userMap} /></div>
+                <div style={{ color: '#dbdee1', fontSize: 13 }}><RenderText text={f.value} userMap={userMap} /></div>
               </div>
             ))}
             {emb.image && (
@@ -158,12 +229,14 @@ export default function TranscriptPage({ transcript }) {
   const duration = t.closedAt && t.createdAt
     ? Math.round((new Date(t.closedAt) - new Date(t.createdAt)) / 60000) : null;
 
+  const userMap = buildUserMap(t.messages);
+
   return (
     <>
       <style>{`
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body { background: #2b2d31; color: #dbdee1; font-family: 'gg sans', 'Noto Sans', Helvetica, Arial, sans-serif; }
-        .emoji { width: 20px; height: 20px; vertical-align: -4px; display: inline; }
+        .emoji { width: 22px; height: 22px; vertical-align: -5px; display: inline; }
         .mention { background: rgba(88,101,242,.3); color: #c9cdfb; border-radius: 3px; padding: 0 2px; }
         code { background: rgba(0,0,0,.3); border-radius: 3px; padding: 1px 4px; font-size: 13px; font-family: monospace; color: #f0f0f0; }
         strong { font-weight: 700; }
@@ -176,7 +249,7 @@ export default function TranscriptPage({ transcript }) {
         .msg-row:hover { background: rgba(0,0,0,.06); }
       `}</style>
 
-      {/* Header estilo Arefy */}
+      {/* Header */}
       <div style={{
         background: '#1e1f22',
         borderBottom: '1px solid rgba(255,255,255,.06)',
@@ -188,10 +261,12 @@ export default function TranscriptPage({ transcript }) {
         top: 0,
         zIndex: 10,
       }}>
-        {t.guildIcon
-          ? <img src={t.guildIcon} alt={t.guildName} style={{ width: 44, height: 44, borderRadius: '50%' }} />
-          : <div style={{ width: 44, height: 44, borderRadius: '50%', background: '#4cadd0', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 18 }}>C</div>
-        }
+        <img
+          src="/thumb.png"
+          alt="CocoCraft"
+          style={{ width: 44, height: 44, borderRadius: '50%', objectFit: 'cover' }}
+          onError={e => { e.target.style.display = 'none'; }}
+        />
         <div>
           <div style={{ color: '#fff', fontWeight: 700, fontSize: 16 }}>{t.guildName || 'CocoCraft'}</div>
           <div style={{ color: '#949ba4', fontSize: 13 }}>#{t.channelName} &nbsp;·&nbsp; Sistema de tickets</div>
@@ -202,45 +277,11 @@ export default function TranscriptPage({ transcript }) {
         </div>
       </div>
 
-      {/* Info bar */}
-      <div style={{
-        background: '#232428',
-        borderBottom: '1px solid rgba(255,255,255,.04)',
-        padding: '10px 20px',
-        display: 'flex',
-        gap: 40,
-        flexWrap: 'wrap',
-        fontSize: 13,
-      }}>
-        <div>
-          <span style={{ color: '#949ba4', fontWeight: 700, textTransform: 'uppercase', fontSize: 11, letterSpacing: 0.5 }}>Canal</span>
-          <div style={{ color: '#dbdee1', marginTop: 2 }}>#{t.channelName}</div>
-        </div>
-        {t.openerId && (
-          <div>
-            <span style={{ color: '#949ba4', fontWeight: 700, textTransform: 'uppercase', fontSize: 11, letterSpacing: 0.5 }}>Abierto por</span>
-            <div style={{ color: '#dbdee1', marginTop: 2 }}>@{t.messages?.find(m => m.authorId === t.openerId)?.authorUsername || t.openerId}</div>
-          </div>
-        )}
-        <div>
-          <span style={{ color: '#949ba4', fontWeight: 700, textTransform: 'uppercase', fontSize: 11, letterSpacing: 0.5 }}>Cerrado por</span>
-          <div style={{ color: '#dbdee1', marginTop: 2 }}>{t.closedBy}</div>
-        </div>
-        <div>
-          <span style={{ color: '#949ba4', fontWeight: 700, textTransform: 'uppercase', fontSize: 11, letterSpacing: 0.5 }}>Fecha apertura</span>
-          <div style={{ color: '#dbdee1', marginTop: 2 }}>{formatTime(t.createdAt)}</div>
-        </div>
-        <div>
-          <span style={{ color: '#949ba4', fontWeight: 700, textTransform: 'uppercase', fontSize: 11, letterSpacing: 0.5 }}>Fecha cierre</span>
-          <div style={{ color: '#dbdee1', marginTop: 2 }}>{formatTime(t.closedAt)}</div>
-        </div>
-      </div>
-
       {/* Mensajes */}
       <div style={{ paddingBottom: 40, paddingTop: 8 }}>
         {t.messages?.map((msg, i) => (
           <div key={msg.id || i} className="msg-row">
-            <Message msg={msg} prevMsg={t.messages[i - 1]} />
+            <Message msg={msg} prevMsg={t.messages[i - 1]} userMap={userMap} />
           </div>
         ))}
       </div>
